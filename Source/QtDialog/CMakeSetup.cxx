@@ -48,6 +48,7 @@ Q_IMPORT_PLUGIN(QXcbIntegrationPlugin);
 
 #if defined(USE_QWindowsIntegrationPlugin)
 Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin);
+Q_IMPORT_PLUGIN(QWindowsVistaStylePlugin);
 #endif
 
 int main(int argc, char** argv)
@@ -139,6 +140,7 @@ int main(int argc, char** argv)
   appIcon.addFile(":/Icons/CMakeSetup32.png");
   appIcon.addFile(":/Icons/CMakeSetup128.png");
   QApplication::setWindowIcon(appIcon);
+  QApplication::setStyle("fusion");
 
   CMakeSetupDialog dialog;
   dialog.show();

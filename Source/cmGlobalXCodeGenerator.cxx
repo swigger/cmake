@@ -298,7 +298,7 @@ void cmGlobalXCodeGenerator::EnableLanguage(
   mf->AddDefinition("XCODE_VERSION", this->VersionString.c_str());
   if (!mf->GetDefinition("CMAKE_CONFIGURATION_TYPES")) {
     mf->AddCacheDefinition(
-      "CMAKE_CONFIGURATION_TYPES", "Debug;Release;MinSizeRel;RelWithDebInfo",
+      "CMAKE_CONFIGURATION_TYPES", "Debug;Release",
       "Semicolon separated list of supported configuration types, "
       "only supports Debug, Release, MinSizeRel, and RelWithDebInfo, "
       "anything else will be ignored.",

@@ -93,7 +93,7 @@ void cmGlobalVisualStudio7Generator::EnableLanguage(
   mf->AddDefinition("CMAKE_GENERATOR_NO_COMPILER_ENV", "1");
   if (!mf->GetDefinition("CMAKE_CONFIGURATION_TYPES")) {
     mf->AddCacheDefinition(
-      "CMAKE_CONFIGURATION_TYPES", "Debug;Release;MinSizeRel;RelWithDebInfo",
+      "CMAKE_CONFIGURATION_TYPES", "Debug;Release",
       "Semicolon separated list of supported configuration types, "
       "only supports Debug, Release, MinSizeRel, and RelWithDebInfo, "
       "anything else will be ignored.",

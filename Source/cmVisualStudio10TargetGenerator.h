@@ -215,6 +215,7 @@ private:
   cmLocalVisualStudio10Generator* const LocalGenerator;
   std::set<std::string> CSharpCustomCommandNames;
   bool IsMissingFiles;
+  bool UsingPCH;
   std::vector<std::string> AddedFiles;
   std::string DefaultArtifactDir;
   bool AddedDefaultCertificate = false;

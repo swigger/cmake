@@ -175,7 +175,7 @@ void cmGlobalVisualStudioGenerator::AddExtraIDETargets()
   for (auto const& it : this->ProjectMap) {
     std::vector<cmLocalGenerator*> const& gen = it.second;
     // add the ALL_BUILD to the first local generator of each project
-    if (!gen.empty()) {
+    if (!gen.empty() && 0) {
       // Use no actual command lines so that the target itself is not
       // considered always out of date.
       cmTarget* allBuild = gen[0]->GetMakefile()->AddUtilityCommand(

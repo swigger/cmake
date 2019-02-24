@@ -1412,6 +1412,11 @@ int cmake::ActualConfigure()
                         this->GlobalGenerator->GetExtraGeneratorName().c_str(),
                         "Name of external makefile project generator.",
                         cmStateEnums::INTERNAL);
+    std::string gname = this->GlobalGenerator->GetName();
+    if (gname.find("Visual Studio") != std::string::npos) {
+      this->AddCacheEntry("CMAKE_SUPPRESS_REGENERATION", "1",
+          "skip regeneration of projects on CMakeFile changes.", cmStateEnums::INTERNAL);
+    }
   }
 
   if (const std::string* instance =

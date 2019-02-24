@@ -244,6 +244,7 @@ cmVisualStudio10TargetGenerator::cmVisualStudio10TargetGenerator(
     this->LocalGenerator->GetTargetDirectory(this->GeneratorTarget);
   this->InSourceBuild = (this->Makefile->GetCurrentSourceDirectory() ==
                          this->Makefile->GetCurrentBinaryDirectory());
+  this->UsingPCH = false;
 }
 
 cmVisualStudio10TargetGenerator::~cmVisualStudio10TargetGenerator()
@@ -1180,7 +1181,8 @@ void cmVisualStudio10TargetGenerator::WriteMSToolConfigurationValues(
   }
   if (this->SpectreMitigationConfigurations.count(config) > 0) {
     e1.Element("SpectreMitigation", "Spectre");
-  }
+  } else
+    e1.Element("SpectreMitigation", "false");
 }
 
 void cmVisualStudio10TargetGenerator::WriteMSToolConfigurationValuesManaged(
@@ -2189,6 +2191,24 @@ void cmVisualStudio10TargetGenerator::OutputSourceSpecificFlags(
       cmVS10GeneratorOptions clOptions(
         this->LocalGenerator, cmVisualStudioGeneratorOptions::Compiler,
         flagtable, this);
+      if (lang == "C" || lang == "CXX") {
+        const char* fn = source->GetFullPath().c_str();
+        const char* fn1;
+        fn1 = strrchr(fn, '/');
+        if (fn1)
+          fn = fn1 + 1;
+        fn1 = strrchr(fn, '\\');
+        if (fn1)
+          fn = fn1 + 1;
+        const char* pch = 0;
+        if (lang == "CXX" && strcmp(fn, "stdafx.cpp") == 0)
+          pch = "Create";
+        else if (lang == "C" && this->UsingPCH)
+          pch = "NotUsing";
+        if (pch) {
+          clOptions.AddFlag("PrecompiledHeader", pch);
+        }
+      }
       if (compileAs) {
         clOptions.AddFlag("CompileAs", compileAs);
       }
@@ -2287,6 +2307,7 @@ void cmVisualStudio10TargetGenerator::WritePathAndIncrementalLinkOptions(
 
   Elem e1(e0, "PropertyGroup");
   e1.Element("_ProjectFileVersion", "10.0.20506.1");
+
   for (std::string const& config : this->Configurations) {
     const std::string cond = this->CalcCondition(config);
 
@@ -2342,8 +2363,8 @@ void cmVisualStudio10TargetGenerator::WritePathAndIncrementalLinkOptions(
     }
 
     if (ttype >= cmStateEnums::UTILITY) {
-      e1.WritePlatformConfigTag(
-        "IntDir", cond, "$(Platform)\\$(Configuration)\\$(ProjectName)\\");
+      //e1.WritePlatformConfigTag(
+      //  "IntDir", cond, "$(Platform)\\$(Configuration)\\$(ProjectName)\\");
     } else {
       std::string intermediateDir =
         this->LocalGenerator->GetTargetDirectory(this->GeneratorTarget);
@@ -2364,8 +2385,8 @@ void cmVisualStudio10TargetGenerator::WritePathAndIncrementalLinkOptions(
       ConvertToWindowsSlash(outDir);
 
       e1.WritePlatformConfigTag("OutDir", cond, outDir);
-
-      e1.WritePlatformConfigTag("IntDir", cond, intermediateDir);
+      if (ttype == cmStateEnums::OBJECT_LIBRARY)
+        e1.WritePlatformConfigTag("IntDir", cond, intermediateDir);
 
       if (const char* sdkExecutableDirectories = this->Makefile->GetDefinition(
             "CMAKE_VS_SDK_EXECUTABLE_DIRECTORIES")) {
@@ -2407,7 +2428,19 @@ void cmVisualStudio10TargetGenerator::WritePathAndIncrementalLinkOptions(
 
       std::string name =
         cmSystemTools::GetFilenameWithoutLastExtension(targetNameFull);
-      e1.WritePlatformConfigTag("TargetName", cond, name);
+      if (name != this->Name) {
+        e1.WritePlatformConfigTag("TargetName", cond, name);
+      }
+
+      const char* defext = 0;
+      if (ttype == cmStateEnums::STATIC_LIBRARY)
+        defext = ".lib";
+      if (ttype == cmStateEnums::SHARED_LIBRARY)
+        defext = ".dll";
+      if (ttype == cmStateEnums::MODULE_LIBRARY)
+        defext = ".dll";
+      if (ttype == cmStateEnums::EXECUTABLE)
+        defext = ".exe";
 
       std::string ext =
         cmSystemTools::GetFilenameLastExtension(targetNameFull);
@@ -2416,7 +2449,9 @@ void cmVisualStudio10TargetGenerator::WritePathAndIncrementalLinkOptions(
         // A single "." appears to be treated as an empty extension.
         ext = ".";
       }
-      e1.WritePlatformConfigTag("TargetExt", cond, ext);
+      if (defext == 0 || ext != defext) {
+        e1.WritePlatformConfigTag("TargetExt", cond, ext);
+      }
 
       this->OutputLinkIncremental(e1, config);
     }
@@ -2568,6 +2603,21 @@ bool cmVisualStudio10TargetGenerator::ComputeClOptions(
   std::string defineFlags = this->Makefile->GetDefineFlags();
   if (this->MSTools) {
     if (this->ProjectType == vcxproj) {
+      this->UsingPCH = false;
+      std::vector<cmSourceFile const*> objectSources;
+      this->GeneratorTarget->GetObjectSources(objectSources, "");
+      for (size_t i = 0; i < objectSources.size(); ++i) {
+        const char* fn = objectSources[i]->GetFullPath().c_str();
+        const char* fn1;
+        fn1 = strrchr(fn, '/');
+        if (fn1)
+          fn = fn1 + 1;
+        fn1 = strrchr(fn, '\\');
+        if (fn1)
+          fn = fn1 + 1;
+        if (strcmp(fn, "stdafx.cpp") == 0)
+          this->UsingPCH = true;
+      }
       clOptions.FixExceptionHandlingDefault();
       if (this->GlobalGenerator->GetVersion() >=
           cmGlobalVisualStudioGenerator::VS15) {
@@ -2579,7 +2629,8 @@ bool cmVisualStudio10TargetGenerator::ComputeClOptions(
         // replace this setting with "true" below.
         clOptions.AddFlag("UseFullPaths", "false");
       }
-      clOptions.AddFlag("PrecompiledHeader", "NotUsing");
+      clOptions.AddFlag("PrecompiledHeader",
+                        this->UsingPCH ? "Use" : "NotUsing");
       std::string asmLocation = configName + "/";
       clOptions.AddFlag("AssemblerListingLocation", asmLocation);
     }
@@ -3497,8 +3548,8 @@ bool cmVisualStudio10TargetGenerator::ComputeLinkOptions(
     imLib += "/";
     imLib += targetNameImport;
 
-    linkOptions.AddFlag("ImportLibrary", imLib);
-    linkOptions.AddFlag("ProgramDataBaseFile", pdb);
+    // linkOptions.AddFlag("ImportLibrary", imLib);
+    // linkOptions.AddFlag("ProgramDataBaseFile", pdb);
 
     // A Windows Runtime component uses internal .NET metadata,
     // so does not have an import library.

@@ -1,6 +1,7 @@
 CMake_QT_STATIC_QWindowsIntegrationPlugin_LIBRARIES
 
 D:\QT5\sysroot\plugins\platforms\qwindowsd.lib
+D:\QT5\sysroot\plugins\styles\qwindowsvistastyled.lib
 D:\QT5\sysroot\lib\libEGLd.lib
 D:\QT5\sysroot\lib\libGLESv2d.lib
 D:\QT5\sysroot\lib\qtharfbuzzd.lib
@@ -24,6 +25,7 @@ dwmapi.lib
 mincore.lib
 ===================================================
 D:\QT5\sysroot\plugins\platforms\qwindows.lib
+D:\QT5\sysroot\plugins\styles\qwindowsvistastyle.lib
 D:\QT5\sysroot\lib\libEGL.lib
 D:\QT5\sysroot\lib\libGLESv2.lib
 D:\QT5\sysroot\lib\qtharfbuzz.lib

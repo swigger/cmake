@@ -53,6 +53,248 @@
 #  include <windows.h>
 #endif
 
+#ifdef _WIN32
+namespace CMPePath {
+static void* sect_find(void* base, IMAGE_SECTION_HEADER* sech, DWORD nsech,
+                       DWORD va, DWORD sz)
+{
+  for (unsigned int i = 0; i < nsech; ++i) {
+    if (sech[i].VirtualAddress <= va &&
+        va + sz <= sech[i].VirtualAddress + sech[i].Misc.VirtualSize) {
+      return (char*)base + (va - sech[i].VirtualAddress) +
+        sech[i].PointerToRawData;
+    }
+  }
+  return 0;
+}
+
+static void do_repl(std::string& tofile, const char* finds, const char* repl)
+{
+  unsigned int flen = strlen(finds);
+  const char* tofptr = tofile.c_str();
+  for (size_t i = 0; i < tofile.size(); ++i) {
+    if (tofptr[i] == '/' || tofptr[i] == '\\') {
+      if (_strnicmp(tofptr + i + 1, finds, flen) == 0) {
+        char ch = tofptr[i + 1 + flen];
+        if (ch == '/' || ch == '\\' || ch == 0) {
+          tofile.replace(i + 1, flen, repl);
+          return;
+        }
+      }
+    }
+  }
+}
+
+template <class T>
+bool foreach_archive(unsigned char* ma, size_t sz, const T& cb)
+{
+  if (memcmp(ma, IMAGE_ARCHIVE_START, IMAGE_ARCHIVE_START_SIZE) != 0)
+    return false;
+
+  for (IMAGE_ARCHIVE_MEMBER_HEADER* m = (IMAGE_ARCHIVE_MEMBER_HEADER*)(ma + 8);
+       (unsigned char*)m < ma + sz;) {
+    if (memcmp(m->EndHeader, IMAGE_ARCHIVE_END, 2) != 0)
+      break;
+    if (memcmp(m->Name, IMAGE_ARCHIVE_LINKER_MEMBER, 16) != 0 &&
+        memcmp(m->Name, IMAGE_ARCHIVE_LONGNAMES_MEMBER, 16) != 0) {
+      unsigned char* s = (unsigned char*)(m + 1);
+      unsigned char* se = s + atoi((char*)m->Size);
+      if (se <= (unsigned char*)ma + sz) {
+        if (!cb(s, se))
+          break;
+      } else
+        break;
+    }
+    (char*&)m += sizeof(IMAGE_ARCHIVE_MEMBER_HEADER) + atoi((char*)m->Size);
+    if ((intptr_t)m & 1)
+      ++(char*&)m;
+  }
+  return true;
+}
+
+enum pe_file_type_t
+{
+  TYPE_UNKNOWN = 0,
+  TYPE_PE32,
+  TYPE_PE64,
+  TYPE_LIB32,
+  TYPE_LIB64,
+  TYPE_FTMASK = 0x7f,
+  TYPE_ISDEBUG = 0x80,
+};
+
+static bool detect_file_type(const std::string& fromfile,
+                             pe_file_type_t& filetype)
+{
+  filetype = TYPE_UNKNOWN;
+  DWORD attr = GetFileAttributesA(fromfile.c_str());
+  if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY))
+    return false;
+  HANDLE hf = CreateFileA(fromfile.c_str(), GENERIC_READ, FILE_SHARE_READ, 0,
+                          OPEN_EXISTING, 0, 0);
+  if (hf == INVALID_HANDLE_VALUE)
+    return false;
+  LARGE_INTEGER li = { 0 };
+  GetFileSizeEx(hf, &li);
+  if (!(li.HighPart == 0 && li.LowPart >= 256 &&
+        li.LowPart < 100 * 0x100000)) {
+    CloseHandle(hf);
+    return false;
+  }
+  HANDLE fm = CreateFileMapping(hf, 0, PAGE_READONLY, 0, li.LowPart, NULL);
+  unsigned char* ma =
+    (unsigned char*)MapViewOfFile(fm, FILE_MAP_READ, 0, 0, li.LowPart);
+  CloseHandle(fm);
+  CloseHandle(hf);
+  if (!ma)
+    return false;
+
+  IMAGE_DOS_HEADER* dosh = (IMAGE_DOS_HEADER*)ma;
+  IMAGE_NT_HEADERS32* nth = (IMAGE_NT_HEADERS32*)((char*)ma + dosh->e_lfanew);
+  IMAGE_NT_HEADERS64* nth64 =
+    (IMAGE_NT_HEADERS64*)((char*)ma + dosh->e_lfanew);
+
+  DWORD tmp = 0, tmp2 = 0;
+  if (dosh->e_magic == IMAGE_DOS_SIGNATURE &&
+      nth->Signature == IMAGE_NT_SIGNATURE) {
+    if (nth->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+      filetype = TYPE_PE32;
+    else if (nth->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+      filetype = TYPE_PE64;
+  }
+
+  std::string low_dllfile;
+  foreach_archive(
+    ma, li.LowPart, [&](unsigned char* s, unsigned char* se) -> bool {
+      switch (*(unsigned short*)s) {
+        case IMAGE_FILE_MACHINE_I386:
+          filetype = TYPE_LIB32;
+          break;
+        case IMAGE_FILE_MACHINE_AMD64:
+          filetype = TYPE_LIB64;
+          break;
+        case 0:
+          if (s + 0x14 < se && *(short*)(s + 2) == -1 &&
+              *(short*)(s + 4) == 0 &&
+              (*(uint16_t*)(s + 6) == IMAGE_FILE_MACHINE_I386 ||
+               *(uint16_t*)(s + 6) == IMAGE_FILE_MACHINE_AMD64)) {
+            const unsigned char* p = s + 0x14;
+            p += strlen((char*)p) + 1;
+            if (p + strlen((char*)p) + 1 <= se) {
+              // this is a lib for import dll. p point to a dll name.
+              std::string dllfile(fromfile);
+              size_t rp = dllfile.find_last_of("/\\");
+              if (rp == std::string::npos)
+                dllfile = (char*)p;
+              else {
+                dllfile.erase(dllfile.begin() + rp + 1, dllfile.end());
+                dllfile += (char*)p;
+              }
+              low_dllfile.swap(dllfile);
+              return false;
+            }
+          }
+          break;
+        default:
+          break;
+      }
+      return true;
+    });
+
+  if (!low_dllfile.empty()) {
+    UnmapViewOfFile(ma);
+    bool r = detect_file_type(low_dllfile, filetype);
+    if (!r)
+      return false;
+    int v = filetype & TYPE_FTMASK;
+    if (v == TYPE_PE32)
+      v = TYPE_LIB32;
+    if (v == TYPE_PE64)
+      v = TYPE_LIB64;
+    v |= filetype & TYPE_ISDEBUG;
+    filetype = (pe_file_type_t)v;
+    return true;
+  }
+
+  bool isdbg = false;
+  if (filetype == TYPE_PE32 || filetype == TYPE_PE64) {
+    unsigned int va, sz;
+    IMAGE_SECTION_HEADER* sech;
+    if (filetype == TYPE_PE32) {
+      va = nth->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]
+             .VirtualAddress;
+      sz =
+        nth->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size;
+      sech = (IMAGE_SECTION_HEADER*)(nth + 1);
+    } else {
+      va = nth64->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]
+             .VirtualAddress;
+      sz =
+        nth64->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size;
+      sech = (IMAGE_SECTION_HEADER*)(nth64 + 1);
+    }
+
+    IMAGE_IMPORT_DESCRIPTOR* iat = (IMAGE_IMPORT_DESCRIPTOR*)sect_find(
+      ma, sech, nth->FileHeader.NumberOfSections, va, sz);
+    for (int i = 0; iat && iat[i].FirstThunk; ++i) {
+      char* name = (char*)sect_find(ma, sech, nth->FileHeader.NumberOfSections,
+                                    iat[i].Name, 1);
+      if (_strnicmp(name, "msvcr", 5) == 0 ||
+          _strnicmp(name, "msvcp", 5)==0 ||
+          _strnicmp(name, "ucrt",4)==0) {
+        char* pname = name+5;
+        while (isalnum(*pname) || *pname == '_') ++ pname;
+        if (*pname == '.' && (pname[-1]|0x20) == 'd')
+        isdbg = true;
+      }
+    }
+  }
+  if (filetype == TYPE_LIB32 || filetype == TYPE_LIB64) {
+    // find: /DEFAULTLIB:"MSVCRTD"
+    for (char* s = (char*)ma; s + 21 < (char*)ma + li.LowPart; ++s) {
+      if (memcmp(s, "/DEFAULTLIB:\"MSVCRTD\"", 21) == 0)
+        isdbg = true;
+    }
+  }
+  UnmapViewOfFile(ma);
+  if (isdbg)
+    filetype = (pe_file_type_t)(filetype | TYPE_ISDEBUG);
+  return true;
+}
+
+void winChangeDest(const std::string& fromfile, std::string& tofile)
+{
+  pe_file_type_t filetype;
+  if (!detect_file_type(fromfile, filetype))
+    return;
+  bool isdbg = !!(filetype & TYPE_ISDEBUG);
+  switch (filetype & TYPE_FTMASK) {
+    case TYPE_LIB32:
+      if (isdbg)
+        do_repl(tofile, "lib", "libd");
+      break;
+    case TYPE_LIB64:
+      if (isdbg)
+        do_repl(tofile, "lib", "lib64d");
+      else
+        do_repl(tofile, "lib", "lib64");
+      break;
+    case TYPE_PE32:
+      if (isdbg)
+        do_repl(tofile, "bin", "bind");
+      break;
+    case TYPE_PE64:
+      if (isdbg)
+        do_repl(tofile, "bin", "bin64d");
+      else
+        do_repl(tofile, "bin", "bin64");
+      break;
+  }
+}
+}
+
+#endif
+
 class cmSystemToolsFileTime;
 
 using namespace cmFSPermissions;
@@ -1554,7 +1796,8 @@ bool cmFileCopier::Run(std::vector<std::string> const& args)
       fromFile += "/";
       fromFile += fromName;
     }
-
+    if (this->Makefile->IsOn("CMAKE_INSTALL_AUTO_CHANGE_DIR"))
+      CMPePath::winChangeDest(fromFile, toFile);
     if (!this->Install(fromFile.c_str(), toFile.c_str())) {
       return false;
     }
